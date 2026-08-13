@@ -7,44 +7,50 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 
-def verify():
-    path = "data/hinval_real_mini.parquet"
-    print(f"Reading mini real dataset from {path}...")
+def verify_file(path, name):
+    print(f"\n================ Verifying {name} Mini Dataset ================")
     try:
         df = pd.read_parquet(path)
-        print("Dataset loaded successfully!")
-        print("Shape:", df.shape)
+        print(f"File: {path}")
+        print(f"Successfully loaded. Shape: {df.shape}")
         print("Columns:", list(df.columns))
         
-        # Display first 3 examples
-        for idx in range(3):
-            row = df.iloc[idx]
-            print(f"\n--- Example {idx+1} ---")
-            print(f"Query ID: {row['query_id']}")
-            print(f"Query Type: {row['query_type']}")
-            print(f"Source Lang: {row['source_lang']} | Target Lang: {row['target_lang']}")
-            print(f"English Query: '{row['Eng_Query']}'")
-            print(f"Hindi Query:   '{row['query']}'")
-            print(f"English Answer: '{row['Eng_Answer']}'")
-            print(f"Hindi Answer:   '{row['Answer']}'")
+        # Verify row count is exactly 5000
+        if df.shape[0] == 5000:
+            print(f" SUCCESS: Row count is exactly 5,000!")
+        else:
+            print(f" WARNING: Row count is {df.shape[0]}, expected 5,000.")
             
-            passages = row['passages']
-            # passages is a dictionary containing list of English and Translated passages, and is_selected
-            eng_passages = passages.get('English_passages', [])
-            trans_passages = passages.get('Translated_passages', [])
-            is_selected = passages.get('is_selected', [])
+        # Spot check first example
+        row = df.iloc[0]
+        print("\nSpot Check (First Example):")
+        print(f"  Query ID: {row['query_id']}")
+        print(f"  Query Type: {row['query_type']}")
+        print(f"  Source Lang: {row['source_lang']} | Target Lang: {row['target_lang']}")
+        print(f"  English Query: '{row['Eng_Query']}'")
+        print(f"  Target Query:  '{row['query']}'")
+        print(f"  English Answer: '{row['Eng_Answer']}'")
+        print(f"  Target Answer:  '{row['Answer']}'")
+        
+        passages = row['passages']
+        eng_passages = passages.get('English_passages', [])
+        trans_passages = passages.get('Translated_passages', [])
+        is_selected = list(passages.get('is_selected', []))
+        
+        print(f"  Passages Count: {len(eng_passages)}")
+        if len(eng_passages) > 0:
+            print(f"  First English passage: '{eng_passages[0][:150]}...'")
+            print(f"  First Target passage:  '{trans_passages[0][:150]}...'")
+            print(f"  is_selected map: {is_selected}")
+            selected_indices = [i for i, val in enumerate(is_selected) if val == 1]
+            print(f"  Ground truth passage indices: {selected_indices}")
             
-            print(f"Passages count: {len(eng_passages)}")
-            if len(eng_passages) > 0:
-                print(f"  First English passage: '{eng_passages[0]}'")
-                print(f"  First Hindi passage:   '{trans_passages[0]}'")
-                print(f"  is_selected: {list(is_selected)}")
-                # find indices where is_selected is 1
-                ground_truth_indices = [i for i, val in enumerate(is_selected) if val == 1]
-                print(f"  Ground truth passage index: {ground_truth_indices}")
-                
     except Exception as e:
-        print("Error during verification:", e)
+        print(f"Error verifying {name}: {e}")
+
+def main():
+    verify_file("data/hinval_real_mini.parquet", "Hindi")
+    verify_file("data/marval_real_mini.parquet", "Marathi")
 
 if __name__ == "__main__":
-    verify()
+    main()

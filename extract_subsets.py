@@ -8,7 +8,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 
-def extract_subset(large_path, mini_path, name, limit=1500):
+def extract_subset(large_path, mini_path, name, limit=5000):
     print(f"--- Extracting subset for {name} ---", flush=True)
     if not os.path.exists(large_path):
         print(f"Error: {large_path} does not exist.", flush=True)
@@ -50,8 +50,8 @@ def main():
     mar_large = "data/marval.parquet"
     mar_mini = "data/marval_real_mini.parquet"
     
-    hin_success = extract_subset(hin_large, hin_mini, "Hindi", limit=1500)
-    mar_success = extract_subset(mar_large, mar_mini, "Marathi", limit=1500)
+    hin_success = extract_subset(hin_large, hin_mini, "Hindi", limit=5000)
+    mar_success = extract_subset(mar_large, mar_mini, "Marathi", limit=5000)
     
     # Cleanup large files if extraction was successful
     if hin_success:
