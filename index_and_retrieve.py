@@ -2,12 +2,14 @@ import os
 import sys
 import time
 import random
+import multiprocessing
 import numpy as np
 import pandas as pd
 import lancedb
 import pyarrow as pa
 import torch
 from tqdm import tqdm
+from onnxruntime import SessionOptions
 from optimum.onnxruntime import ORTModelForFeatureExtraction
 from transformers import AutoTokenizer
 
@@ -21,14 +23,14 @@ if hasattr(sys.stderr, 'reconfigure'):
 from chunking import Chunker
 
 # ----------------- Configuration -----------------
-LIMIT_ROWS = 1000        # Number of rows per language to index (~60k chunks total for fast local run)
+LIMIT_ROWS = 300         # Under 1k rows per language for rapid, responsive benchmarking
 NUM_EVAL_SAMPLES = 100   # Number of validation queries to run per language
 MODEL_DIR = "./model_onnx"
 DB_DIR = "data/lancedb"
 TABLE_NAME = "multilingual_passages"
 
 # ----------------- Load & Sub-sample base passages -----------------
-def load_passages_and_queries(limit_rows=1000):
+def load_passages_and_queries(limit_rows=300):
     print(f"Loading first {limit_rows} rows from parquet files...", flush=True)
     df_hi = pd.read_parquet("data/hinval_real_mini.parquet").head(limit_rows)
     df_mr = pd.read_parquet("data/marval_real_mini.parquet").head(limit_rows)
@@ -98,7 +100,7 @@ def mean_pooling(model_output, attention_mask):
     input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
     return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
-def embed_texts(texts, tokenizer, model, batch_size=128, is_query=False):
+def embed_texts(texts, tokenizer, model, batch_size=32, is_query=False):
     prefix = "query: " if is_query else "passage: "
     prefixed_texts = [prefix + t for t in texts]
     
@@ -118,14 +120,22 @@ def embed_texts(texts, tokenizer, model, batch_size=128, is_query=False):
 
 # ----------------- Main Pipeline -----------------
 def main():
-    # 1. Load ONNX Model and Tokenizer
-    print("\nLoading local ONNX model...", flush=True)
+    # 1. Setup ONNX Runtime Session Options for Multithreading Optimization on CPU
+    print("\nConfiguring CPU multithreading options for ONNX Runtime...", flush=True)
+    options = SessionOptions()
+    cores = multiprocessing.cpu_count()
+    print(f"Detected {cores} CPU cores. Setting intra_op_num_threads to {cores} for parallel inference...", flush=True)
+    options.intra_op_num_threads = cores
+    options.inter_op_num_threads = 1
+    
+    # 2. Load ONNX Model and Tokenizer
+    print("Loading local ONNX model...", flush=True)
     t0 = time.time()
-    model = ORTModelForFeatureExtraction.from_pretrained(MODEL_DIR)
+    model = ORTModelForFeatureExtraction.from_pretrained(MODEL_DIR, session_options=options)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
     print(f"ONNX Model loaded in {time.time() - t0:.2f} seconds.", flush=True)
     
-    # 2. Extract and Chunk Base Passages
+    # 3. Extract and Chunk Base Passages
     passages, eval_queries = load_passages_and_queries(LIMIT_ROWS)
     
     print("\nGenerating metadata-aware chunks from base passages...", flush=True)
@@ -136,7 +146,7 @@ def main():
         all_chunks.extend(chunks)
     print(f"Total metadata-aware chunks generated: {len(all_chunks)}", flush=True)
     
-    # 3. Setup LanceDB Table
+    # 4. Setup LanceDB Table
     print("\nSetting up LanceDB database...", flush=True)
     os.makedirs(DB_DIR, exist_ok=True)
     db = lancedb.connect(DB_DIR)
@@ -153,8 +163,8 @@ def main():
     
     tbl = db.create_table(TABLE_NAME, schema=schema, mode="overwrite")
     
-    # 4. Generate Embeddings & Index in batches
-    batch_size = 256
+    # 5. Generate Embeddings & Index in batches
+    batch_size = 32  # Reduced batch size for CPU cache efficiency and speed
     print(f"\nEmbedding and indexing {len(all_chunks)} chunks in batches of {batch_size} on CPU...", flush=True)
     
     t_start_indexing = time.time()
@@ -187,7 +197,7 @@ def main():
     indexing_duration = time.time() - t_start_indexing
     print(f"Indexing complete! Added {len(records)} records in {indexing_duration:.2f} seconds ({len(records)/indexing_duration:.2f} chunks/sec).", flush=True)
     
-    # 5. Evaluate Retrieval Recall & Latency per language
+    # 6. Evaluate Retrieval Recall & Latency per language
     print("\n" + "="*60)
     print("RETRIEVAL EVALUATION BENCHMARK")
     print("="*60)
@@ -232,7 +242,6 @@ def main():
             total_latencies.append(emb_lat + search_lat)
             
             # Step C: Evaluate Recall@5 (whether the ground-truth passage was retrieved)
-            # A hit means there is a retrieved chunk where query_id matching AND passage_index == gt_idx
             matches = results[(results["query_id"] == q_id) & (results["passage_index"] == gt_idx)]
             if len(matches) > 0:
                 hits += 1
@@ -243,7 +252,7 @@ def main():
         avg_total_lat = np.mean(total_latencies)
         p95_total_lat = np.percentile(total_latencies, 95)
         
-        print(f"Results for {lang.upper()}:")
+        print(f"\nResults for {lang.upper()}:")
         print(f"  Recall@5:                {recall:.2f}%")
         print(f"  Avg Embedding Latency:   {avg_emb_lat:.2f} ms")
         print(f"  Avg Vector DB Search:     {avg_search_lat:.2f} ms")
