@@ -11,22 +11,86 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 
-# Helper: Regex-based multilingual sentence splitter (handles danda '।' and English punctuation)
-def split_sentences(text):
+# Generic multilingual stop words for local keyword extraction
+STOPWORDS = set([
+    # English stop words
+    "the", "a", "an", "and", "or", "but", "is", "are", "was", "were", "be", "been", "being", 
+    "in", "on", "at", "to", "for", "of", "with", "by", "about", "as", "that", "this", "these", 
+    "those", "it", "its", "they", "them", "their", "what", "which", "who", "whom", "how", "why", 
+    "where", "when", "can", "could", "will", "would", "shall", "should", "may", "might", "must", 
+    "has", "have", "had", "do", "does", "did", "also", "many", "some", "any", "other", "such", 
+    "no", "not", "only", "first", "more", "most", "than", "then", "into", "out", "from", "up",
+    # Hindi stop words (common Devanagari words)
+    "है", "हैं", "था", "थी", "थे", "का", "की", "के", "को", "ने", "से", "में", "पर", "और", "या", 
+    "भी", "ही", "तो", "यह", "वह", "जो", "कर", "करना", "करने", "किया", "दिये", "दिया", "इस", 
+    "उस", "एक", "दो", "तीन", "चार", "पांच", "सकता", "सकते", "सकती", "हुए", "हुआ", "हुई",
+    # Marathi stop words
+    "आहे", "आहेत", "होता", "होती", "होते", "चा", "ची", "चे", "च्या", "ला", "ने", "साठी", 
+    "मध्ये", "वर", "आणि", "किंवा", "पण", "परंतु", "या", "त्या", "हा", "ही", "हे", "ते", 
+    "सर्व", "एक", "दोन", "तीन", "पासून", "पर्यंत"
+])
+
+# Local keyword extractor (Devanagari + English support) with length safety checks
+def extract_keywords(text, num_keywords=3):
+    if not text:
+        return "general"
+    # Find all words (support Latin alphabet and Devanagari script range \u0900-\u097F)
+    words = re.findall(r'\b[a-zA-Z\u0900-\u097F]+\b', text.lower())
+    # Filter stopwords, short terms, and also enforce max length of 25 characters to avoid run-on garbage words
+    filtered = [w for w in words if w not in STOPWORDS and 2 < len(w) <= 25]
+    if not filtered:
+        return "information"
+    
+    freq = {}
+    for w in filtered:
+        freq[w] = freq.get(w, 0) + 1
+        
+    sorted_words = sorted(freq.keys(), key=lambda x: freq[x], reverse=True)
+    # Join and limit total keywords string length to 60 characters to keep prefix bounded
+    kw_str = ", ".join(sorted_words[:num_keywords])
+    return kw_str[:60]
+
+# Helper: Split long texts to prevent outlier massive chunks
+def split_long_text(text, max_len=400, overlap=50):
+    if len(text) <= max_len:
+        return [text]
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + max_len
+        chunks.append(text[start:end])
+        if end >= len(text):
+            break
+        start += (max_len - overlap)
+    return chunks
+
+# Helper: Regex-based multilingual sentence splitter with fallback for long unpunctuated text
+def split_sentences(text, max_sentence_len=400):
     if not text:
         return []
-    # Split on punctuation followed by whitespace or end of string
+    # 1. Split on punctuation followed by space
     sentences = re.split(r'(?<=[.!?।])\s+', text)
-    return [s.strip() for s in sentences if s.strip()]
+    processed = []
+    for s in sentences:
+        s = s.strip()
+        if not s:
+            continue
+        # 2. Check for sentence outliers (no punctuation or massive run-on blocks)
+        if len(s) > max_sentence_len:
+            processed.extend(split_long_text(s, max_len=300, overlap=50))
+        else:
+            processed.append(s)
+    return processed
 
 # ----------------- Chunker class -----------------
 class Chunker:
-    def __init__(self, query_id, passage_index, language, text, query_text=None):
+    def __init__(self, query_id, passage_index, language, text, query_text=None, query_type="general"):
         self.query_id = query_id
         self.passage_index = passage_index
         self.language = language
         self.text = text
         self.query_text = query_text
+        self.query_type = query_type.upper() if query_type else "GENERAL"
 
     # 1. Naive Fixed-Size Chunking (Character-based with overlap)
     def naive_fixed_size(self, chunk_size=200, overlap=50):
@@ -61,7 +125,8 @@ class Chunker:
 
     # 2. Sentence/Semantic-Based Splitting (Grouping sentences up to max character limit)
     def sentence_based(self, max_char_len=300):
-        sentences = split_sentences(self.text)
+        # Using the sentence splitter with built-in outlier fallback
+        sentences = split_sentences(self.text, max_sentence_len=400)
         if not sentences:
             return []
             
@@ -72,7 +137,6 @@ class Chunker:
         
         for s in sentences:
             s_len = len(s)
-            # If adding this sentence exceeds limit and current_chunk is not empty, flush
             if current_len + s_len > max_char_len and current_chunk:
                 chunk_text = " ".join(current_chunk)
                 chunks.append({
@@ -90,7 +154,6 @@ class Chunker:
             current_chunk.append(s)
             current_len += s_len + 1  # +1 for space join
             
-        # Flush final chunk
         if current_chunk:
             chunk_text = " ".join(current_chunk)
             chunks.append({
@@ -103,11 +166,10 @@ class Chunker:
             })
         return chunks
 
-    # 3. Metadata-Aware Chunking (Splitting logically and augmenting text with context prefix)
-    def metadata_aware(self, max_char_len=250):
-        # We split by sentences, but we prepend a contextual prefix (e.g. language, query_id)
-        # to the chunk text itself to enrich its vector representation!
-        sentences = split_sentences(self.text)
+    # 3. Metadata-Aware Chunking (Augmented prefix with generic, reusable categories and keywords)
+    def metadata_aware(self, max_char_len=300):
+        # Using the sentence splitter with built-in outlier fallback
+        sentences = split_sentences(self.text, max_sentence_len=400)
         if not sentences:
             return []
             
@@ -116,13 +178,14 @@ class Chunker:
         current_len = 0
         seq = 0
         
-        # Base context to prepend to chunk text
+        # Build generic, reusable metadata (avoids literal query overfitting)
         lang_name = "English" if self.language == "en" else ("Hindi" if self.language == "hi" else "Marathi")
-        context_prefix = f"Language: {lang_name} | Query context: {self.query_text} | Passage text: " if self.query_text else f"Language: {lang_name} | Passage text: "
+        keywords = extract_keywords(self.text, num_keywords=3)
+        context_prefix = f"Language: {lang_name} | Category: {self.query_type} | Keywords: {keywords} | Passage: "
         
         for s in sentences:
             s_len = len(s)
-            # We measure chunk size including the prefix!
+            # We measure chunk size including the context prefix to stay bounded
             if len(context_prefix) + current_len + s_len > max_char_len and current_chunk:
                 chunk_body = " ".join(current_chunk)
                 full_text = f"{context_prefix}{chunk_body}"
@@ -133,7 +196,7 @@ class Chunker:
                     "language": self.language,
                     "text": full_text,
                     "strategy": "metadata_aware",
-                    "raw_body": chunk_body  # preserve clean raw text
+                    "raw_body": chunk_body  # Clean raw text is kept for LLM injection
                 })
                 current_chunk = []
                 current_len = 0
@@ -165,8 +228,6 @@ def load_base_passages():
     print(f"Loaded {df_hi.shape[0]} Hindi rows and {df_mr.shape[0]} Marathi rows.", flush=True)
     
     passages_list = []
-    
-    # Track unique English passages using (query_id, passage_index) to avoid duplicates
     seen_english = set()
     
     # Process Hindi file (contains English and Hindi)
@@ -174,6 +235,7 @@ def load_base_passages():
         q_id = row['query_id']
         eng_q = row['Eng_Query']
         hi_q = row['query']
+        q_type = row.get('query_type', 'general')
         
         eng_pass = row['passages']['English_passages']
         hi_pass = row['passages']['Translated_passages']
@@ -181,25 +243,24 @@ def load_base_passages():
         for i in range(len(eng_pass)):
             # 1. Add English passage (if not seen)
             if (q_id, i) not in seen_english:
-                passages_list.append(Chunker(q_id, i, "en", eng_pass[i], eng_q))
+                passages_list.append(Chunker(q_id, i, "en", eng_pass[i], eng_q, q_type))
                 seen_english.add((q_id, i))
                 
             # 2. Add Hindi passage
             if i < len(hi_pass):
-                passages_list.append(Chunker(q_id, i, "hi", hi_pass[i], hi_q))
+                passages_list.append(Chunker(q_id, i, "hi", hi_pass[i], hi_q, q_type))
                 
     # Process Marathi file (contains Marathi)
     for _, row in df_mr.iterrows():
         q_id = row['query_id']
         mar_q = row['query']
+        q_type = row.get('query_type', 'general')
         
-        # We don't extract English passages from Marathi file because they are identical to Hindi file
         mar_pass = row['passages']['Translated_passages']
         for i in range(len(mar_pass)):
-            passages_list.append(Chunker(q_id, i, "mr", mar_pass[i], mar_q))
+            passages_list.append(Chunker(q_id, i, "mr", mar_pass[i], mar_q, q_type))
             
     print(f"Extracted {len(passages_list)} total base passages across 3 languages.", flush=True)
-    # Count breakdown
     en_cnt = sum(1 for p in passages_list if p.language == "en")
     hi_cnt = sum(1 for p in passages_list if p.language == "hi")
     mr_cnt = sum(1 for p in passages_list if p.language == "mr")
@@ -239,7 +300,7 @@ def evaluate_strategies(passages):
         }
         
     print("\n" + "="*50)
-    print("COMPARATIVE CHUNKING ANALYSIS")
+    print("COMPARATIVE CHUNKING ANALYSIS (UPDATED - SAFE METADATA)")
     print("="*50)
     
     for strat, res in results.items():
@@ -249,7 +310,6 @@ def evaluate_strategies(passages):
         print(f"  Min/Max Chunk Size:      {res['min_size']} / {res['max_size']} chars")
         print(f"  Chunking Speed:          {res['time']:.4f} seconds")
 
-    # Show example outputs for each strategy across languages
     print("\n" + "="*50)
     print("SAMPLE OUTPUTS PER STRATEGY AND LANGUAGE")
     print("="*50)
@@ -259,7 +319,6 @@ def evaluate_strategies(passages):
     for strat in strategies:
         print(f"\n>>> Strategy: {strat.upper()} <<<")
         for lang in languages:
-            # Find first chunk of this language
             sample_chunk = None
             for c in results[strat]["chunks"]:
                 if c["language"] == lang:
