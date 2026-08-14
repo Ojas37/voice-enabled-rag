@@ -42,3 +42,9 @@ yarn-error.log*
 
 # Git sub-files or local configs
 *.local
+
+# Local model weights
+model_onnx/
+model_onnx_small/
+model_onnx_base/
+*_onnx/
