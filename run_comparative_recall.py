@@ -11,7 +11,7 @@ import torch
 from tqdm import tqdm
 from onnxruntime import SessionOptions
 from optimum.onnxruntime import ORTModelForFeatureExtraction
-from transformers import AutoTokenizer
+from transformers import AutoModel, AutoTokenizer
 
 # Reconfigure stdout/stderr to UTF-8
 if hasattr(sys.stdout, 'reconfigure'):
@@ -23,7 +23,7 @@ if hasattr(sys.stderr, 'reconfigure'):
 from chunking import Chunker
 
 # ----------------- Configuration -----------------
-LIMIT_ROWS = 100         # Use 100 rows (~6,000 chunks) for representative recall benchmarking
+LIMIT_ROWS = 1000        # CUDA enabled: 1k rows (~64k chunks) will index in seconds on GPU!
 NUM_EVAL_SAMPLES = 100   # Number of validation queries to run per language
 DB_DIR_PREFIX = "data/lancedb_compare"
 
@@ -42,8 +42,12 @@ MODELS_CONFIG = {
     }
 }
 
+# Device detection (use GPU if CUDA is available)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Device configuration: {DEVICE.type.upper()} active.", flush=True)
+
 # ----------------- Load Parquet rows -----------------
-def load_passages_and_queries(limit_rows=500):
+def load_passages_and_queries(limit_rows=1000):
     print(f"Loading first {limit_rows} rows from parquet...", flush=True)
     df_hi = pd.read_parquet("data/hinval_real_mini.parquet").head(limit_rows)
     df_mr = pd.read_parquet("data/marval_real_mini.parquet").head(limit_rows)
@@ -92,18 +96,17 @@ def load_passages_and_queries(limit_rows=500):
             
     return passages_list, eval_queries
 
-# ----------------- Export ONNX Helper -----------------
+# ----------------- Export ONNX Helper (Fallback for CPU) -----------------
 def ensure_onnx_model(model_name, save_dir):
-    if not os.path.exists(save_dir) or not os.listdir(save_dir):
-        print(f"\nONNX model not found in {save_dir}. Exporting {model_name}...", flush=True)
-        os.makedirs(save_dir, exist_ok=True)
-        model = ORTModelForFeatureExtraction.from_pretrained(model_name, export=True)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model.save_pretrained(save_dir)
-        tokenizer.save_pretrained(save_dir)
-        print(f"ONNX model saved successfully to {save_dir}!", flush=True)
-    else:
-        print(f"\nONNX model found in {save_dir}.", flush=True)
+    if DEVICE.type == "cpu":
+        if not os.path.exists(save_dir) or not os.listdir(save_dir):
+            print(f"\nONNX model not found in {save_dir}. Exporting {model_name}...", flush=True)
+            os.makedirs(save_dir, exist_ok=True)
+            model = ORTModelForFeatureExtraction.from_pretrained(model_name, export=True)
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model.save_pretrained(save_dir)
+            tokenizer.save_pretrained(save_dir)
+            print(f"ONNX model saved successfully to {save_dir}!", flush=True)
 
 # ----------------- Text Embeddings -----------------
 def mean_pooling(model_output, attention_mask):
@@ -111,14 +114,21 @@ def mean_pooling(model_output, attention_mask):
     input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
     return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
-def embed_texts(texts, tokenizer, model, batch_size=32, is_query=False):
+def embed_texts(texts, tokenizer, model, batch_size=64, is_query=False):
     prefix = "query: " if is_query else "passage: "
     prefixed_texts = [prefix + t for t in texts]
     
     all_embeddings = []
-    for i in range(0, len(prefixed_texts), batch_size):
-        batch = prefixed_texts[i:i+batch_size]
+    # Use larger batch size on GPU for parallel acceleration
+    effective_batch_size = 128 if DEVICE.type == "cuda" else batch_size
+    
+    for i in range(0, len(prefixed_texts), effective_batch_size):
+        batch = prefixed_texts[i:i+effective_batch_size]
         encoded_input = tokenizer(batch, padding=True, truncation=True, max_length=512, return_tensors='pt')
+        
+        # Move tensors to target device (GPU/CPU)
+        encoded_input = {k: v.to(DEVICE) for k, v in encoded_input.items()}
+        
         with torch.no_grad():
             model_output = model(**encoded_input)
             
@@ -131,35 +141,41 @@ def embed_texts(texts, tokenizer, model, batch_size=32, is_query=False):
 # ----------------- Indexing and Evaluating -----------------
 def run_model_pipeline(model_key, passages, eval_queries):
     config = MODELS_CONFIG[model_key]
-    ensure_onnx_model(config["model_id"], config["onnx_dir"])
     
-    print(f"\nConfiguring ONNX session options for {model_key}...", flush=True)
-    options = SessionOptions()
-    cores = multiprocessing.cpu_count()
-    options.intra_op_num_threads = cores
-    options.inter_op_num_threads = 1
-    
-    print(f"Loading {model_key} ONNX model...", flush=True)
-    model = ORTModelForFeatureExtraction.from_pretrained(config["onnx_dir"], session_options=options)
-    tokenizer = AutoTokenizer.from_pretrained(config["onnx_dir"])
-    
-    # 1. Chunk base passages
+    # 1. Load Model & Tokenizer based on hardware provider
+    tokenizer = AutoTokenizer.from_pretrained(config["model_id"])
+    if DEVICE.type == "cuda":
+        print(f"\nLoading native PyTorch model {config['model_id']} on GPU (CUDA)...", flush=True)
+        model = AutoModel.from_pretrained(config["model_id"]).to(DEVICE)
+    else:
+        # CPU Fallback: Load ONNX Model
+        ensure_onnx_model(config["model_id"], config["onnx_dir"])
+        print(f"\nConfiguring ONNX session options for CPU execution...", flush=True)
+        options = SessionOptions()
+        cores = multiprocessing.cpu_count()
+        options.intra_op_num_threads = cores
+        options.inter_op_num_threads = 1
+        model = ORTModelForFeatureExtraction.from_pretrained(config["onnx_dir"], session_options=options)
+        
+    # 2. Chunk base passages
     all_chunks = []
     for p in passages:
         chunks = p.metadata_aware(max_char_len=300)
         all_chunks.extend(chunks)
-    print(f"Total chunks: {len(all_chunks)}", flush=True)
+    print(f"Total chunks generated: {len(all_chunks)}", flush=True)
     
-    # 2. Embed and Index in LanceDB
-    print(f"Embedding chunks using {model_key}...", flush=True)
+    # 3. Embed and Index in LanceDB
+    print(f"Embedding chunks using {model_key} model on {DEVICE.type.upper()}...", flush=True)
     t_start_indexing = time.time()
     chunk_texts = [c["text"] for c in all_chunks]
     
+    # Batch sizes: 128 for GPU, 32 for CPU cache optimization
+    run_batch = 128 if DEVICE.type == "cuda" else 32
+    
     embeddings = []
-    # Using batch size of 32 for CPU cache optimization
-    for i in tqdm(range(0, len(chunk_texts), 32), desc=f"Embedding Chunks ({model_key})"):
-        batch = chunk_texts[i:i+32]
-        batch_emb = embed_texts(batch, tokenizer, model, batch_size=32, is_query=False)
+    for i in tqdm(range(0, len(chunk_texts), run_batch), desc=f"Embedding Chunks ({model_key})"):
+        batch = chunk_texts[i:i+run_batch]
+        batch_emb = embed_texts(batch, tokenizer, model, batch_size=run_batch, is_query=False)
         embeddings.append(batch_emb)
     embeddings = np.vstack(embeddings)
     
@@ -190,10 +206,9 @@ def run_model_pipeline(model_key, passages, eval_queries):
         })
     tbl.add(records)
     
-    # Create IVF-PQ Index to ensure sub-10ms search time
+    # Create IVF-PQ ANN Index to guarantee sub-10ms search time
     print("Building IVF-PQ ANN Index...", flush=True)
     t_index_start = time.perf_counter()
-    # Simple IvyPq index setup (standard LanceDB configuration)
     tbl.create_index(
         num_partitions=64, 
         num_sub_vectors=96 if model_key == "small" else 192, 
@@ -205,7 +220,7 @@ def run_model_pipeline(model_key, passages, eval_queries):
     
     print(f"Indexing complete in {indexing_duration:.2f}s (Index build: {t_index_build:.2f}s)", flush=True)
     
-    # 3. Evaluate Recall@5, 8, 10
+    # 4. Evaluate Recall@5, 8, 10
     languages = ["en", "hi", "mr"]
     recall_results = {}
     
@@ -225,10 +240,9 @@ def run_model_pipeline(model_key, passages, eval_queries):
             gt_idx = q["gt_index"]
             
             t0 = time.perf_counter()
-            # Embed query
+            # Embed query on GPU/CPU
             q_vector = embed_texts([q_text], tokenizer, model, batch_size=1, is_query=True)[0]
-            # Search LanceDB using the IVF-PQ index
-            # Limit search to 10 nearest neighbors
+            # Search LanceDB using the IVF-PQ Index
             results = tbl.search(q_vector.tolist()).limit(10).to_pandas()
             lat = (time.perf_counter() - t0) * 1000.0
             total_latencies.append(lat)
