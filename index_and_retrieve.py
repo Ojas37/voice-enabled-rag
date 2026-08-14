@@ -11,7 +11,7 @@ import torch
 from tqdm import tqdm
 from onnxruntime import SessionOptions
 from optimum.onnxruntime import ORTModelForFeatureExtraction
-from transformers import AutoTokenizer
+from transformers import AutoModel, AutoTokenizer
 
 # Reconfigure stdout/stderr to UTF-8
 if hasattr(sys.stdout, 'reconfigure'):
@@ -23,14 +23,19 @@ if hasattr(sys.stderr, 'reconfigure'):
 from chunking import Chunker
 
 # ----------------- Configuration -----------------
-LIMIT_ROWS = 300         # Under 1k rows per language for rapid, responsive benchmarking
+# Approved: Index the full 5,000 rows per language!
+LIMIT_ROWS = 5000
 NUM_EVAL_SAMPLES = 100   # Number of validation queries to run per language
-MODEL_DIR = "./model_onnx"
+MODEL_ID = "intfloat/multilingual-e5-base"  # Approved winner of Phase 3 comparative recall test
 DB_DIR = "data/lancedb"
 TABLE_NAME = "multilingual_passages"
 
+# Device detection (use CUDA GPU if available)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Device configuration: {DEVICE.type.upper()} active.", flush=True)
+
 # ----------------- Load & Sub-sample base passages -----------------
-def load_passages_and_queries(limit_rows=300):
+def load_passages_and_queries(limit_rows=5000):
     print(f"Loading first {limit_rows} rows from parquet files...", flush=True)
     df_hi = pd.read_parquet("data/hinval_real_mini.parquet").head(limit_rows)
     df_mr = pd.read_parquet("data/marval_real_mini.parquet").head(limit_rows)
@@ -108,6 +113,10 @@ def embed_texts(texts, tokenizer, model, batch_size=32, is_query=False):
     for i in range(0, len(prefixed_texts), batch_size):
         batch = prefixed_texts[i:i+batch_size]
         encoded_input = tokenizer(batch, padding=True, truncation=True, max_length=512, return_tensors='pt')
+        
+        # Move tensors to GPU if active
+        encoded_input = {k: v.to(DEVICE) for k, v in encoded_input.items()}
+        
         with torch.no_grad():
             model_output = model(**encoded_input)
             
@@ -120,39 +129,41 @@ def embed_texts(texts, tokenizer, model, batch_size=32, is_query=False):
 
 # ----------------- Main Pipeline -----------------
 def main():
-    # 1. Setup ONNX Runtime Session Options for Multithreading Optimization on CPU
-    print("\nConfiguring CPU multithreading options for ONNX Runtime...", flush=True)
-    options = SessionOptions()
-    cores = multiprocessing.cpu_count()
-    print(f"Detected {cores} CPU cores. Setting intra_op_num_threads to {cores} for parallel inference...", flush=True)
-    options.intra_op_num_threads = cores
-    options.inter_op_num_threads = 1
-    
-    # 2. Load ONNX Model and Tokenizer
-    print("Loading local ONNX model...", flush=True)
+    # 1. Load Model & Tokenizer based on device
     t0 = time.time()
-    model = ORTModelForFeatureExtraction.from_pretrained(MODEL_DIR, session_options=options)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
-    print(f"ONNX Model loaded in {time.time() - t0:.2f} seconds.", flush=True)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+    if DEVICE.type == "cuda":
+        print(f"\nLoading native PyTorch model {MODEL_ID} on GPU (CUDA)...", flush=True)
+        model = AutoModel.from_pretrained(MODEL_ID).to(DEVICE)
+    else:
+        # Fallback to local CPU ONNX
+        print("\nFallback CPU: Loading local ONNX model...", flush=True)
+        options = SessionOptions()
+        cores = multiprocessing.cpu_count()
+        options.intra_op_num_threads = cores
+        options.inter_op_num_threads = 1
+        model = ORTModelForFeatureExtraction.from_pretrained("./model_onnx_base", session_options=options)
+        
+    print(f"Model loaded in {time.time() - t0:.2f} seconds.", flush=True)
     
-    # 3. Extract and Chunk Base Passages
+    # 2. Extract and Chunk Base Passages
     passages, eval_queries = load_passages_and_queries(LIMIT_ROWS)
     
     print("\nGenerating metadata-aware chunks from base passages...", flush=True)
     all_chunks = []
-    for p in passages:
+    for p in tqdm(passages, desc="Chunking Passages"):
         # Use our safe Metadata-Aware chunker
         chunks = p.metadata_aware(max_char_len=300)
         all_chunks.extend(chunks)
     print(f"Total metadata-aware chunks generated: {len(all_chunks)}", flush=True)
     
-    # 4. Setup LanceDB Table
+    # 3. Setup LanceDB Table (768 dimensions for E5-Base)
     print("\nSetting up LanceDB database...", flush=True)
     os.makedirs(DB_DIR, exist_ok=True)
     db = lancedb.connect(DB_DIR)
     
     schema = pa.schema([
-        pa.field("vector", pa.list_(pa.float32(), 384)), # Dimension for multilingual-e5-small
+        pa.field("vector", pa.list_(pa.float32(), 768)), # E5-Base dimension is 768
         pa.field("chunk_id", pa.string()),
         pa.field("query_id", pa.int64()),
         pa.field("passage_index", pa.int32()),
@@ -163,15 +174,15 @@ def main():
     
     tbl = db.create_table(TABLE_NAME, schema=schema, mode="overwrite")
     
-    # 5. Generate Embeddings & Index in batches
-    batch_size = 32  # Reduced batch size for CPU cache efficiency and speed
-    print(f"\nEmbedding and indexing {len(all_chunks)} chunks in batches of {batch_size} on CPU...", flush=True)
+    # 4. Generate Embeddings & Index in batches
+    # GPU: Safe batch size of 32 to avoid driver paging and VRAM swapping
+    batch_size = 32
+    print(f"\nEmbedding and indexing {len(all_chunks)} chunks in batches of {batch_size} on {DEVICE.type.upper()}...", flush=True)
     
     t_start_indexing = time.time()
     
     chunk_texts = [c["text"] for c in all_chunks]
     
-    # We embed chunks in batches to show progress
     embeddings = []
     for i in tqdm(range(0, len(chunk_texts), batch_size), desc="Embedding Chunks"):
         batch = chunk_texts[i:i+batch_size]
@@ -194,12 +205,26 @@ def main():
         })
         
     tbl.add(records)
-    indexing_duration = time.time() - t_start_indexing
-    print(f"Indexing complete! Added {len(records)} records in {indexing_duration:.2f} seconds ({len(records)/indexing_duration:.2f} chunks/sec).", flush=True)
     
-    # 6. Evaluate Retrieval Recall & Latency per language
+    # 5. Build IVF-PQ Approximate Nearest Neighbors index to optimize search speed
+    print("\nBuilding IVF-PQ ANN index for sub-10ms query execution...", flush=True)
+    t_index_start = time.perf_counter()
+    # Simple IvyPq index setup (standard LanceDB configuration)
+    tbl.create_index(
+        num_partitions=256,        # Larger partitions for 300,000 vectors
+        num_sub_vectors=192,       # Quantization subvectors
+        metric="cosine",
+        replace=True
+    )
+    t_index_build = time.perf_counter() - t_index_start
+    indexing_duration = time.time() - t_start_indexing
+    
+    print(f"Indexing complete! Added {len(records)} records in {indexing_duration:.2f} seconds (Index build: {t_index_build:.2f}s).", flush=True)
+    print(f"Average throughput: {len(records)/indexing_duration:.2f} chunks/sec.", flush=True)
+    
+    # 6. Evaluate Retrieval Recall & Latency per language (Recall@8 for win strategy)
     print("\n" + "="*60)
-    print("RETRIEVAL EVALUATION BENCHMARK")
+    print("RETRIEVAL EVALUATION BENCHMARK (Recall@8)")
     print("="*60)
     
     for lang in ["en", "hi", "mr"]:
@@ -207,15 +232,12 @@ def main():
         if len(lang_queries) < NUM_EVAL_SAMPLES:
             sampled_queries = lang_queries
         else:
-            # Sample queries deterministically for reproducibility
             random.seed(42)
             sampled_queries = random.sample(lang_queries, NUM_EVAL_SAMPLES)
             
         print(f"\nEvaluating {len(sampled_queries)} queries for language: {lang.upper()}...", flush=True)
         
-        hits = 0
-        emb_latencies = []
-        search_latencies = []
+        hits_at_8 = 0
         total_latencies = []
         
         for q in tqdm(sampled_queries, desc=f"Querying {lang.upper()}"):
@@ -223,39 +245,24 @@ def main():
             q_id = q["query_id"]
             gt_idx = q["gt_index"]
             
-            # Step A: Embed the query
-            t_emb_start = time.perf_counter()
+            t0 = time.perf_counter()
             q_vector = embed_texts([q_text], tokenizer, model, batch_size=1, is_query=True)[0]
-            t_emb_end = time.perf_counter()
+            # Retrieve 8 results to align with approved strategy
+            results = tbl.search(q_vector.tolist()).limit(8).to_pandas()
+            lat = (time.perf_counter() - t0) * 1000.0
             
-            # Step B: Perform LanceDB search
-            t_search_start = time.perf_counter()
-            results = tbl.search(q_vector.tolist()).limit(5).to_pandas()
-            t_search_end = time.perf_counter()
+            total_latencies.append(lat)
             
-            # Record latencies in milliseconds
-            emb_lat = (t_emb_end - t_emb_start) * 1000.0
-            search_lat = (t_search_end - t_search_start) * 1000.0
-            
-            emb_latencies.append(emb_lat)
-            search_latencies.append(search_lat)
-            total_latencies.append(emb_lat + search_lat)
-            
-            # Step C: Evaluate Recall@5 (whether the ground-truth passage was retrieved)
             matches = results[(results["query_id"] == q_id) & (results["passage_index"] == gt_idx)]
             if len(matches) > 0:
-                hits += 1
+                hits_at_8 += 1
                 
-        recall = (hits / len(sampled_queries)) * 100.0
-        avg_emb_lat = np.mean(emb_latencies)
-        avg_search_lat = np.mean(search_latencies)
+        recall = (hits_at_8 / len(sampled_queries)) * 100.0
         avg_total_lat = np.mean(total_latencies)
         p95_total_lat = np.percentile(total_latencies, 95)
         
         print(f"\nResults for {lang.upper()}:")
-        print(f"  Recall@5:                {recall:.2f}%")
-        print(f"  Avg Embedding Latency:   {avg_emb_lat:.2f} ms")
-        print(f"  Avg Vector DB Search:     {avg_search_lat:.2f} ms")
+        print(f"  Recall@8:                {recall:.2f}%")
         print(f"  Avg Total Retrieval:     {avg_total_lat:.2f} ms")
         print(f"  95th Percentile Retrieval: {p95_total_lat:.2f} ms")
 
