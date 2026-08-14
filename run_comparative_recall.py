@@ -23,7 +23,7 @@ if hasattr(sys.stderr, 'reconfigure'):
 from chunking import Chunker
 
 # ----------------- Configuration -----------------
-LIMIT_ROWS = 500         # Use 500 rows (~32,000 chunks) for representative recall benchmarking
+LIMIT_ROWS = 100         # Use 100 rows (~6,000 chunks) for representative recall benchmarking
 NUM_EVAL_SAMPLES = 100   # Number of validation queries to run per language
 DB_DIR_PREFIX = "data/lancedb_compare"
 
