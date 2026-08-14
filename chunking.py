@@ -35,7 +35,7 @@ def extract_keywords(text, num_keywords=3):
     if not text:
         return "general"
     # Find all words (support Latin alphabet and Devanagari script range \u0900-\u097F)
-    words = re.findall(r'\b[a-zA-Z\u0900-\u097F]+\b', text.lower())
+    words = re.findall(r'[a-zA-Z\u0900-\u097F]+', text.lower())
     # Filter stopwords, short terms, and also enforce max length of 25 characters to avoid run-on garbage words
     filtered = [w for w in words if w not in STOPWORDS and 2 < len(w) <= 25]
     if not filtered:
