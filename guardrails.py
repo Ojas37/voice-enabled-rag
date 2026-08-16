@@ -76,7 +76,7 @@ class GuardrailEngine:
         return normalized.to(torch.float32).cpu().numpy()[0]
 
     def check_output_grounding(self, generated_answer: str, retrieved_vectors, retrieved_texts, 
-                                low_threshold: float = 0.65, high_threshold: float = 0.75):
+                                low_threshold: float = 0.80, high_threshold: float = 0.85):
         """
         Post-generation validation.
         Compares generated answer vector to retrieved context vectors.

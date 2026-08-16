@@ -110,21 +110,9 @@ class RAGPipeline:
         results, t_emb, t_search = self.retrieve_context(query_text, top_k)
         print(f"Retrieval complete in {((t_emb + t_search)*1000.0):.2f} ms (Embedding: {t_emb*1000.0:.2f} ms | Search: {t_search*1000.0:.2f} ms)", flush=True)
         
-        # 2. Pre-Retrieval Input Validation Guardrail
-        is_relevant, max_sim = self.guardrails.check_input_relevance(results, similarity_threshold=0.60)
-        print(f"Input Guardrail: Relevance Score = {max_sim:.4f} | Status = {'PASSED' if is_relevant else 'BLOCKED'}", flush=True)
-        
-        if not is_relevant:
-            print("\nInput query classified as OFF-TOPIC. Bypassing LLM call.", flush=True)
-            fallback = "I don't know based on the provided context."
-            if not results.empty:
-                lang = results.iloc[0]['language']
-                if lang == 'hi':
-                    fallback = "दिए गए संदर्भ के आधार पर मुझे उत्तर नहीं पता है।"
-                elif lang == 'mr':
-                    fallback = "दिलेल्या संदर्भाच्या आधारे मला उत्तर माहित नाही."
-            print(f"\n{fallback}", flush=True)
-            return
+        # 2. Pre-Retrieval Input Relevance Info (rely on post-generation grounding check to block off-topic content)
+        _, max_sim = self.guardrails.check_input_relevance(results, similarity_threshold=0.0)
+        print(f"Input Guardrail: Relevance Score = {max_sim:.4f}", flush=True)
             
         # 3. Extract Context Text (using clean raw_body)
         context_blocks = []
