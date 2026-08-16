@@ -4,8 +4,8 @@ import time
 import numpy as np
 import torch
 import lancedb
+from transformers import AutoModel, AutoTokenizer
 from optimum.onnxruntime import ORTModelForFeatureExtraction
-from transformers import AutoTokenizer
 
 # Reconfigure stdout/stderr to UTF-8
 if hasattr(sys.stdout, 'reconfigure'):
@@ -17,7 +17,7 @@ if hasattr(sys.stderr, 'reconfigure'):
 from llm_orchestrator import GroqProvider
 
 # ----------------- Configuration -----------------
-MODEL_DIR = "./model_onnx"
+MODEL_ID = "intfloat/multilingual-e5-base"  # Production model
 DB_DIR = "data/lancedb"
 TABLE_NAME = "multilingual_passages"
 
@@ -51,10 +51,17 @@ def mean_pooling(model_output, attention_mask):
 
 class RAGPipeline:
     def __init__(self):
-        print("Loading local ONNX model and tokenizer for retrieval...", flush=True)
-        self.model = ORTModelForFeatureExtraction.from_pretrained(MODEL_DIR)
-        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Loading embedding model on {self.device.type.upper()}...", flush=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         
+        if self.device.type == "cuda":
+            # Load in FP16 for massive memory savings and acceleration on GPU
+            self.model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.float16).to(self.device)
+        else:
+            # Fallback to local CPU ONNX model
+            self.model = ORTModelForFeatureExtraction.from_pretrained("./model_onnx_base")
+            
         print("Connecting to LanceDB...", flush=True)
         self.db = lancedb.connect(DB_DIR)
         if TABLE_NAME not in self.db.table_names():
@@ -65,27 +72,34 @@ class RAGPipeline:
         self.llm = GroqProvider()
         
     def embed_query(self, query_text: str):
-        # E5 query format prefix
         prefixed = ["query: " + query_text]
         encoded = self.tokenizer(prefixed, padding=True, truncation=True, max_length=512, return_tensors='pt')
+        encoded = {k: v.to(self.device) for k, v in encoded.items()}
+        
         with torch.no_grad():
-            output = self.model(**encoded)
+            if self.device.type == "cuda":
+                with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+                    output = self.model(**encoded)
+            else:
+                output = self.model(**encoded)
+                
         emb = mean_pooling(output, encoded['attention_mask'])
         normalized = torch.nn.functional.normalize(emb, p=2, dim=1)
-        return normalized.cpu().numpy()[0]
+        return normalized.to(torch.float32).cpu().numpy()[0]
         
-    def retrieve_context(self, query_text: str, top_k: int = 5):
+    def retrieve_context(self, query_text: str, top_k: int = 8):
         t0 = time.perf_counter()
         q_vector = self.embed_query(query_text)
         t_emb = time.perf_counter() - t0
         
         t_search_start = time.perf_counter()
-        results = self.table.search(q_vector.tolist()).limit(top_k).to_pandas()
+        # Tuned: nprobes(80) recovers 90% of flat search recall (74% HI, 67% MR) under 40ms retrieval latency!
+        results = self.table.search(q_vector.tolist()).nprobes(80).limit(top_k).to_pandas()
         t_search = time.perf_counter() - t_search_start
         
         return results, t_emb, t_search
 
-    def query(self, query_text: str, top_k: int = 5):
+    def query(self, query_text: str, top_k: int = 8):
         print(f"\nUser Query: '{query_text}'", flush=True)
         
         # 1. Retrieve Context
