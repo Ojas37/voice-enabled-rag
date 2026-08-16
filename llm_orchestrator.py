@@ -5,7 +5,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from dotenv import load_dotenv
 from groq import Groq
 
-load_dotenv()
+load_dotenv(override=True)
 
 # Abstract base class for modular LLM providers
 class LLMProvider(ABC):
