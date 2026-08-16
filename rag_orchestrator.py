@@ -144,21 +144,38 @@ class RAGPipeline:
         t_total_gen = time.perf_counter() - t_gen_start
         
         # 6. Post-Generation Grounding Guardrail
-        retrieved_vectors = [np.array(v, dtype=np.float32) for v in results['vector'].values]
-        retrieved_texts = results['text'].values
+        # Check if the generated answer is a refusal statement
+        refusal_keywords = [
+            "don't know", "do not know", "no information", 
+            "mahit nahi", "maheet nahi", "माहित नाही",
+            "nahin pata", "nahin pata", "नहीं पता"
+        ]
+        is_refusal = any(kw.lower() in generated_answer.lower() for kw in refusal_keywords)
         
-        grounding_status, score = self.guardrails.check_output_grounding(
-            generated_answer, retrieved_vectors, retrieved_texts,
-            low_threshold=0.65, high_threshold=0.75
-        )
-        
-        # If Borderline, fall back to fast Groq LLM check
-        if grounding_status == "BORDERLINE":
-            print(f"Grounding: Borderline Score ({score:.4f}). Invoking LLM validator...", flush=True)
-            grounding_status = self.guardrails.run_llm_grounding_eval(generated_answer, retrieved_texts)
+        if is_refusal:
+            grounding_status = "REFUSAL"
+            score = 0.0
+            print("Grounding Guardrail: Refusal detected -> Bypassing semantic checks.", flush=True)
+            print(f"Grounding Guardrail: Score = N/A | Status = {grounding_status} | Path = REFUSAL_BYPASS", flush=True)
+        else:
+            retrieved_vectors = [np.array(v, dtype=np.float32) for v in results['vector'].values]
+            retrieved_texts = results['text'].values
             
-        print(f"Grounding Guardrail: Score = {score:.4f} | Status = {grounding_status}", flush=True)
-        
+            grounding_status, score = self.guardrails.check_output_grounding(
+                generated_answer, retrieved_vectors, retrieved_texts,
+                low_threshold=0.80, high_threshold=0.85
+            )
+            
+            # If Borderline, fall back to fast Groq LLM check
+            if grounding_status == "BORDERLINE":
+                print(f"Grounding: Borderline Score ({score:.4f}) -> Invoking LLM validator...", flush=True)
+                grounding_status = self.guardrails.run_llm_grounding_eval(generated_answer, retrieved_texts)
+                print(f"Grounding Guardrail: Score = {score:.4f} | Status = {grounding_status} | Path = BORDERLINE_LLM_EVAL", flush=True)
+            elif grounding_status == "GROUNDED":
+                print(f"Grounding Guardrail: Score = {score:.4f} | Status = {grounding_status} | Path = AUTO_PASS (Similarity > 0.85)", flush=True)
+            else:
+                print(f"Grounding Guardrail: Score = {score:.4f} | Status = {grounding_status} | Path = AUTO_BLOCK (Similarity < 0.80)", flush=True)
+            
         if grounding_status == "NOT GROUNDED":
             print("\nHallucination detected! Blocking generated answer.", flush=True)
             fallback = "I don't know based on the provided context."
@@ -169,7 +186,7 @@ class RAGPipeline:
                 fallback = "दिलेल्या संदर्भाच्या आधारे मला उत्तर माहित नाही."
             print(f"\n{fallback}", flush=True)
         else:
-            # Print the validated grounded answer
+            # Print the validated grounded answer or refusal
             print(f"\n(TTFT: {ttft_ms:.2f} ms) {generated_answer}", flush=True)
             
         print(f"\nGeneration complete in {t_total_gen:.2f} seconds.", flush=True)
