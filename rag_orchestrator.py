@@ -15,6 +15,7 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 # Import modules
 from llm_orchestrator import GroqProvider
+from guardrails import GuardrailEngine
 
 # ----------------- Configuration -----------------
 MODEL_ID = "intfloat/multilingual-e5-base"  # Production model
@@ -71,6 +72,9 @@ class RAGPipeline:
         print("Initializing Groq LLM Provider...", flush=True)
         self.llm = GroqProvider()
         
+        # Initialize Guardrails & Grounding Engine
+        self.guardrails = GuardrailEngine(self.model, self.tokenizer, self.device, self.llm)
+        
     def embed_query(self, query_text: str):
         prefixed = ["query: " + query_text]
         encoded = self.tokenizer(prefixed, padding=True, truncation=True, max_length=512, return_tensors='pt')
@@ -106,7 +110,23 @@ class RAGPipeline:
         results, t_emb, t_search = self.retrieve_context(query_text, top_k)
         print(f"Retrieval complete in {((t_emb + t_search)*1000.0):.2f} ms (Embedding: {t_emb*1000.0:.2f} ms | Search: {t_search*1000.0:.2f} ms)", flush=True)
         
-        # 2. Extract Context Text (using clean raw_body)
+        # 2. Pre-Retrieval Input Validation Guardrail
+        is_relevant, max_sim = self.guardrails.check_input_relevance(results, similarity_threshold=0.60)
+        print(f"Input Guardrail: Relevance Score = {max_sim:.4f} | Status = {'PASSED' if is_relevant else 'BLOCKED'}", flush=True)
+        
+        if not is_relevant:
+            print("\nInput query classified as OFF-TOPIC. Bypassing LLM call.", flush=True)
+            fallback = "I don't know based on the provided context."
+            if not results.empty:
+                lang = results.iloc[0]['language']
+                if lang == 'hi':
+                    fallback = "दिए गए संदर्भ के आधार पर मुझे उत्तर नहीं पता है।"
+                elif lang == 'mr':
+                    fallback = "दिलेल्या संदर्भाच्या आधारे मला उत्तर माहित नाही."
+            print(f"\n{fallback}", flush=True)
+            return
+            
+        # 3. Extract Context Text (using clean raw_body)
         context_blocks = []
         for idx, row in results.iterrows():
             lang = row['language'].upper()
@@ -115,33 +135,63 @@ class RAGPipeline:
             
         context_text = "\n\n".join(context_blocks)
         
-        # 3. Format Prompt
+        # 4. Format Prompt
         user_prompt = USER_PROMPT_TEMPLATE.format(context_text=context_text, query_text=query_text)
         
-        # 4. Stream Response from LLM
+        # 5. Buffer LLM Generation to evaluate grounding before printing (guarantees safety)
         print("\nStreaming grounded answer:", flush=True)
         t_first_token = None
         t_gen_start = time.perf_counter()
         
         stream = self.llm.generate_stream(SYSTEM_PROMPT, user_prompt)
+        full_answer_list = []
         
         for chunk in stream:
             if t_first_token is None:
                 t_first_token = time.perf_counter()
                 ttft_ms = (t_first_token - t_gen_start) * 1000.0
-                print(f" (TTFT: {ttft_ms:.2f} ms) ", end="", flush=True)
-            print(chunk, end="", flush=True)
+            full_answer_list.append(chunk)
             
+        generated_answer = "".join(full_answer_list)
         t_total_gen = time.perf_counter() - t_gen_start
-        print(f"\n\nGeneration complete in {t_total_gen:.2f} seconds.", flush=True)
+        
+        # 6. Post-Generation Grounding Guardrail
+        retrieved_vectors = [np.array(v, dtype=np.float32) for v in results['vector'].values]
+        retrieved_texts = results['text'].values
+        
+        grounding_status, score = self.guardrails.check_output_grounding(
+            generated_answer, retrieved_vectors, retrieved_texts,
+            low_threshold=0.65, high_threshold=0.75
+        )
+        
+        # If Borderline, fall back to fast Groq LLM check
+        if grounding_status == "BORDERLINE":
+            print(f"Grounding: Borderline Score ({score:.4f}). Invoking LLM validator...", flush=True)
+            grounding_status = self.guardrails.run_llm_grounding_eval(generated_answer, retrieved_texts)
+            
+        print(f"Grounding Guardrail: Score = {score:.4f} | Status = {grounding_status}", flush=True)
+        
+        if grounding_status == "NOT GROUNDED":
+            print("\nHallucination detected! Blocking generated answer.", flush=True)
+            fallback = "I don't know based on the provided context."
+            lang = results.iloc[0]['language']
+            if lang == 'hi':
+                fallback = "दिए गए संदर्भ के आधार पर मुझे उत्तर नहीं पता है।"
+            elif lang == 'mr':
+                fallback = "दिलेल्या संदर्भाच्या आधारे मला उत्तर माहित नाही."
+            print(f"\n{fallback}", flush=True)
+        else:
+            # Print the validated grounded answer
+            print(f"\n(TTFT: {ttft_ms:.2f} ms) {generated_answer}", flush=True)
+            
+        print(f"\nGeneration complete in {t_total_gen:.2f} seconds.", flush=True)
 
 if __name__ == "__main__":
-    # Simple interactive command-line interface for testing
     try:
         pipeline = RAGPipeline()
         
         print("\n" + "="*50)
-        print("Multilingual RAG Interactive CLI")
+        print("Multilingual RAG Interactive CLI (with Guardrails)")
         print("="*50)
         print("Type 'exit' to quit.")
         
