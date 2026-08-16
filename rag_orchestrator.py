@@ -91,14 +91,42 @@ class RAGPipeline:
         normalized = torch.nn.functional.normalize(emb, p=2, dim=1)
         return normalized.to(torch.float32).cpu().numpy()[0]
         
-    def retrieve_context(self, query_text: str, top_k: int = 8):
+    def detect_language(self, query_text: str) -> str:
+        # Check for Devnagari characters
+        has_devnagari = any(ord(char) >= 0x0900 and ord(char) <= 0x097F for char in query_text)
+        if not has_devnagari:
+            return "en"
+        
+        # Distinguish Hindi vs Marathi using character patterns / stopwords
+        marathi_indicators = ["आहे", "आहेत", "काय", "हे", "या", "करून", "झाले", "झाली", "पण", "वर", "काही", "कोणते", "कोणती", "म्हणजे"]
+        hindi_indicators = ["है", "हैं", "क्या", "यह", "करना", "हुआ", "हुई", "लेकिन", "पर", "कुछ", "कौन", "कौनसा"]
+        
+        normalized = query_text.lower()
+        marathi_count = sum(1 for word in marathi_indicators if word in normalized)
+        hindi_count = sum(1 for word in hindi_indicators if word in normalized)
+        
+        if marathi_count > hindi_count:
+            return "mr"
+        elif hindi_count > marathi_count:
+            return "hi"
+        else:
+            return "hi_mr"
+
+    def retrieve_context(self, query_text: str, top_k: int = 8, language_filter: str = None):
         t0 = time.perf_counter()
         q_vector = self.embed_query(query_text)
         t_emb = time.perf_counter() - t0
         
         t_search_start = time.perf_counter()
-        # Tuned: nprobes(80) recovers 90% of flat search recall (74% HI, 67% MR) under 40ms retrieval latency!
-        results = self.table.search(q_vector.tolist()).nprobes(80).limit(top_k).to_pandas()
+        search_query = self.table.search(q_vector.tolist()).nprobes(80)
+        
+        # Apply language SQL filter natively to eliminate cross-language leakage
+        if language_filter == "hi_mr":
+            search_query = search_query.where("language IN ('hi', 'mr')")
+        elif language_filter in ["en", "hi", "mr"]:
+            search_query = search_query.where(f"language = '{language_filter}'")
+            
+        results = search_query.limit(top_k).to_pandas()
         t_search = time.perf_counter() - t_search_start
         
         return results, t_emb, t_search
@@ -106,15 +134,31 @@ class RAGPipeline:
     def query(self, query_text: str, top_k: int = 8):
         print(f"\nUser Query: '{query_text}'", flush=True)
         
-        # 1. Retrieve Context
-        results, t_emb, t_search = self.retrieve_context(query_text, top_k)
+        # 1. Pre-Groq Safety Guardrail
+        if not self.guardrails.is_query_safe(query_text):
+            print("Input Guardrail: Safety Check = BLOCKED (Dangerous category detected)", flush=True)
+            fallback = "I don't know based on the provided context."
+            lang_filter = self.detect_language(query_text)
+            if lang_filter == "hi":
+                fallback = "दिए गए संदर्भ के आधार पर मुझे उत्तर नहीं पता है।"
+            elif lang_filter == "mr":
+                fallback = "दिलेल्या संदर्भाच्या आधारे मला उत्तर माहित नाही."
+            print(f"\n{fallback}", flush=True)
+            return
+
+        # 2. Detect Language to Filter Context
+        lang_filter = self.detect_language(query_text)
+        print(f"Language Detection: Identified = {lang_filter.upper()}", flush=True)
+
+        # 3. Retrieve Context (filtered by language)
+        results, t_emb, t_search = self.retrieve_context(query_text, top_k, lang_filter)
         print(f"Retrieval complete in {((t_emb + t_search)*1000.0):.2f} ms (Embedding: {t_emb*1000.0:.2f} ms | Search: {t_search*1000.0:.2f} ms)", flush=True)
         
-        # 2. Pre-Retrieval Input Relevance Info (rely on post-generation grounding check to block off-topic content)
+        # 4. Pre-Retrieval Input Relevance Info (rely on post-generation grounding check to block off-topic content)
         _, max_sim = self.guardrails.check_input_relevance(results, similarity_threshold=0.0)
         print(f"Input Guardrail: Relevance Score = {max_sim:.4f}", flush=True)
             
-        # 3. Extract Context Text (using clean raw_body)
+        # 5. Extract Context Text (using clean raw_body)
         context_blocks = []
         for idx, row in results.iterrows():
             lang = row['language'].upper()

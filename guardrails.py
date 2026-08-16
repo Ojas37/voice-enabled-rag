@@ -28,12 +28,30 @@ Proposed Answer:
 
 Evaluation:"""
 
+# Pre-Groq safety blocklist for dangerous categories (weapons, exploits, self-harm)
+DANGER_KEYWORDS = [
+    "bomb", "explosive", "weapon", "gun", "shoot", "kill", "murder",
+    "hack", "exploit", "malware", "phishing", "bypass security", "cyberattack",
+    "suicide", "self-harm", "self harm",
+    # Hindi translations
+    "बम", "हथियार", "गोली", "मारना", "हैक", "आत्महत्या",
+    # Marathi translations
+    "बॉम्ब", "हत्यार", "गोळी", "मारणे", "हैक"
+]
 class GuardrailEngine:
     def __init__(self, model, tokenizer, device, llm_provider):
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
         self.llm = llm_provider
+        
+    def is_query_safe(self, query_text: str) -> bool:
+        """Pre-Groq safety filter: checks query against blocklist keywords."""
+        normalized = query_text.lower()
+        for word in DANGER_KEYWORDS:
+            if word in normalized:
+                return False
+        return True
         
     def check_input_relevance(self, lancedb_results, similarity_threshold: float = 0.60):
         """
