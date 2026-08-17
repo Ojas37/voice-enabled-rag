@@ -235,6 +235,134 @@ class RAGPipeline:
             
         print(f"\nGeneration complete in {t_total_gen:.2f} seconds.", flush=True)
 
+    def query_stream_events(self, query_text: str, top_k: int = 8):
+        """
+        Runs RAG query and yields dictionary events for streaming API support.
+        This isolates all steps and avoids printing directly to stdout.
+        """
+        # 1. Pre-Groq Safety Guardrail
+        if not self.guardrails.is_query_safe(query_text):
+            fallback = "I don't know based on the provided context."
+            lang_filter = self.detect_language(query_text)
+            if lang_filter == "hi":
+                fallback = "दिए गए संदर्भ के आधार पर मुझे उत्तर नहीं पता है।"
+            elif lang_filter == "mr":
+                fallback = "दिलेल्या संदर्भाच्या आधारे मला उत्तर माहित नाही."
+            yield {
+                "event": "safety_block",
+                "relevance_score": 0.0,
+                "fallback_answer": fallback
+            }
+            return
+
+        # 2. Detect Language
+        lang_filter = self.detect_language(query_text)
+        
+        # 3. Retrieve Context
+        results, t_emb, t_search = self.retrieve_context(query_text, top_k, lang_filter)
+        retrieval_ms = (t_emb + t_search) * 1000.0
+        
+        # 4. Input Relevance Score
+        _, max_sim = self.guardrails.check_input_relevance(results, similarity_threshold=0.0)
+        
+        yield {
+            "event": "retrieval_complete",
+            "language": lang_filter,
+            "retrieval_ms": retrieval_ms,
+            "embedding_ms": t_emb * 1000.0,
+            "search_ms": t_search * 1000.0,
+            "relevance_score": float(max_sim)
+        }
+        
+        # 5. Extract Context Text
+        context_blocks = []
+        for idx, row in results.iterrows():
+            lang = row['language'].upper()
+            body = row['raw_body']
+            context_blocks.append(f"[{lang} Context {idx+1}]:\n{body}")
+        context_text = "\n\n".join(context_blocks)
+        
+        user_prompt = USER_PROMPT_TEMPLATE.format(context_text=context_text, query_text=query_text)
+        
+        # 6. Call LLM (and measure TTFT)
+        t_first_token = None
+        t_gen_start = time.perf_counter()
+        
+        stream = self.llm.generate_stream(SYSTEM_PROMPT, user_prompt)
+        full_answer_list = []
+        
+        # Fetch tokens from Groq
+        for chunk in stream:
+            if t_first_token is None:
+                t_first_token = time.perf_counter()
+                ttft_ms = (t_first_token - t_gen_start) * 1000.0
+                yield {
+                    "event": "generation_start",
+                    "ttft_ms": ttft_ms
+                }
+            full_answer_list.append(chunk)
+            
+        generated_answer = "".join(full_answer_list)
+        total_gen_s = time.perf_counter() - t_gen_start
+        
+        # 7. Post-Generation Grounding Guardrail
+        refusal_keywords = [
+            "don't know", "do not know", "no information", 
+            "mahit nahi", "maheet nahi", "माहित नाही",
+            "nahin pata", "nahin pata", "नहीं पता"
+        ]
+        is_refusal = any(kw.lower() in generated_answer.lower() for kw in refusal_keywords)
+        
+        if is_refusal:
+            yield {
+                "event": "grounding_complete",
+                "status": "REFUSAL",
+                "score": 0.0,
+                "answer": generated_answer,
+                "latency_s": total_gen_s
+            }
+            return
+            
+        retrieved_vectors = [np.array(v, dtype=np.float32) for v in results['vector'].values]
+        retrieved_texts = results['text'].values
+        
+        grounding_status, score = self.guardrails.check_output_grounding(
+            generated_answer, retrieved_vectors, retrieved_texts,
+            low_threshold=0.80, high_threshold=0.85
+        )
+        
+        # If Borderline, fall back to fast Groq LLM check
+        if grounding_status == "BORDERLINE":
+            yield {
+                "event": "borderline_evaluation",
+                "score": float(score)
+            }
+            grounding_status = self.guardrails.run_llm_grounding_eval(generated_answer, retrieved_texts)
+            
+        if grounding_status == "NOT GROUNDED":
+            fallback = "I don't know based on the provided context."
+            if not results.empty:
+                lang = results.iloc[0]['language']
+                if lang == 'hi':
+                    fallback = "दिए गए संदर्भ के आधार पर मुझे उत्तर नहीं पता है।"
+                elif lang == 'mr':
+                    fallback = "दिलेल्या संदर्भाच्या आधारे मला उत्तर माहित नाही."
+            yield {
+                "event": "grounding_complete",
+                "status": "NOT GROUNDED",
+                "score": float(score),
+                "answer": fallback,
+                "latency_s": total_gen_s
+            }
+        else:
+            yield {
+                "event": "grounding_complete",
+                "status": "GROUNDED",
+                "score": float(score),
+                "answer": generated_answer,
+                "latency_s": total_gen_s
+            }
+
 if __name__ == "__main__":
     try:
         pipeline = RAGPipeline()
