@@ -16,7 +16,7 @@ class LLMProvider(ABC):
 
 # Groq implementation of LLMProvider
 class GroqProvider(LLMProvider):
-    def __init__(self, model_name: str = "llama-3.1-8b-instant"):
+    def __init__(self, model_name: str = "openai/gpt-oss-20b"):
         self.api_key = os.getenv("GROQ_API_KEY")
         if not self.api_key:
             print("Warning: GROQ_API_KEY environment variable not found. Please set it in your .env file.", file=sys.stderr)
