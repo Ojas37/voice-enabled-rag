@@ -5,7 +5,8 @@ import asyncio
 import time
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 # Reconfigure stdout/stderr to UTF-8
@@ -24,6 +25,10 @@ from stt_provider import SarvamSTT
 # Initialize FastAPI App
 app = FastAPI(title="Voice-Enabled Multilingual RAG Backend")
 
+# Mount Static Files (serves styles and client JS)
+os.makedirs("static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 # Enable CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
@@ -32,6 +37,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Root dashboard router
+@app.get("/")
+def read_index():
+    return FileResponse("static/index.html")
 
 # Global variables for lazy loading
 pipeline = None
@@ -85,7 +95,7 @@ def query_text_endpoint(payload: dict):
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
 
 @app.post("/api/query-voice")
-async def query_voice_endpoint(file: UploadFile = File(...)):
+async def query_voice_endpoint(file: UploadFile = File(...), language: str = Form("en")):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No audio file uploaded.")
         

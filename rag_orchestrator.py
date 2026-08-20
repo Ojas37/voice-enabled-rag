@@ -265,13 +265,23 @@ class RAGPipeline:
         # 4. Input Relevance Score
         _, max_sim = self.guardrails.check_input_relevance(results, similarity_threshold=0.0)
         
+        # Format sources for frontend lineage mapping
+        sources = []
+        for idx, row in results.iterrows():
+            sources.append({
+                "raw_body": row['raw_body'],
+                "language": row['language'],
+                "score": float(1.0 - row['_distance']) if '_distance' in row else 1.0
+            })
+            
         yield {
             "event": "retrieval_complete",
             "language": lang_filter,
             "retrieval_ms": retrieval_ms,
             "embedding_ms": t_emb * 1000.0,
             "search_ms": t_search * 1000.0,
-            "relevance_score": float(max_sim)
+            "relevance_score": float(max_sim),
+            "sources": sources
         }
         
         # 5. Extract Context Text
@@ -301,6 +311,10 @@ class RAGPipeline:
                     "ttft_ms": ttft_ms
                 }
             full_answer_list.append(chunk)
+            yield {
+                "event": "token",
+                "text": chunk
+            }
             
         generated_answer = "".join(full_answer_list)
         total_gen_s = time.perf_counter() - t_gen_start

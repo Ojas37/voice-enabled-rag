@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multilingual Voice RAG Engine</title>
+    
+    <!-- Professional Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Devanagari:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Lora:ital,wght@0,500;1,500&display=swap" rel="stylesheet">
+    
+    <!-- Chart.js CDN for performance profiling -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+
+    <header class="app-header">
+        <div class="header-logo">
+            <span class="logo-text">RAG ENGINE DASHBOARD</span>
+            <span class="badge badge-status">SYSTEM ONLINE</span>
+        </div>
+        <div class="header-meta">
+            <span class="meta-label">LLM:</span><span class="meta-value">openai/gpt-oss-20b</span>
+            <span class="meta-separator">|</span>
+            <span class="meta-label">EMBEDDING:</span><span class="meta-value">multilingual-e5-base</span>
+        </div>
+    </header>
+
+    <main class="dashboard-grid">
+        
+        <!-- Left Sidebar: Controls & Metrics Rail -->
+        <aside class="metric-rail">
+            <section class="panel-section">
+                <h2 class="panel-title">Language Config</h2>
+                <div class="lang-selector">
+                    <label class="control-label radio-container">
+                        <input type="radio" name="retrieval-lang" value="en" checked>
+                        <span class="radio-label">English (en)</span>
+                    </label>
+                    <label class="control-label radio-container">
+                        <input type="radio" name="retrieval-lang" value="hi">
+                        <span class="radio-label">Hindi (hi)</span>
+                    </label>
+                    <label class="control-label radio-container">
+                        <input type="radio" name="retrieval-lang" value="mr">
+                        <span class="radio-label">Marathi (mr)</span>
+                    </label>
+                </div>
+            </section>
+
+            <section class="panel-section fill-height">
+                <h2 class="panel-title">Latency Profile (ms)</h2>
+                <div class="chart-container">
+                    <canvas id="latencyChart"></canvas>
+                </div>
+                <div class="metric-table-container">
+                    <table class="metric-table">
+                        <tbody>
+                            <tr>
+                                <td>STT RTT</td>
+                                <td id="metric-stt" class="mono-value">-</td>
+                            </tr>
+                            <tr>
+                                <td>Retrieval</td>
+                                <td id="metric-retrieval" class="mono-value">-</td>
+                            </tr>
+                            <tr>
+                                <td>LLM TTFT</td>
+                                <td id="metric-ttft" class="mono-value">-</td>
+                            </tr>
+                            <tr>
+                                <td>LLM Generation</td>
+                                <td id="metric-gen" class="mono-value">-</td>
+                            </tr>
+                            <tr>
+                                <td>Guardrails</td>
+                                <td id="metric-guard" class="mono-value">-</td>
+                            </tr>
+                            <tr class="highlight-row">
+                                <td>E2E Response RTT</td>
+                                <td id="metric-e2e" class="mono-value">-</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </aside>
+
+        <!-- Right Workspace: Action & Streaming Log Grid -->
+        <div class="workspace-area">
+            
+            <!-- Top Input Block -->
+            <section class="panel-card query-card">
+                <div class="query-control-header">
+                    <span class="card-label">Voice RAG Interface</span>
+                    <span id="recording-status" class="status-indicator">READY</span>
+                </div>
+                
+                <div class="mic-workspace">
+                    <button id="mic-btn" class="btn btn-mic">
+                        <div class="btn-icon">🎙️</div>
+                        <span id="mic-btn-text">Click to Record / Press Space</span>
+                    </button>
+                </div>
+                
+                <!-- Signature Ribbon: Minimalist Signal Meter -->
+                <div class="ribbon-container">
+                    <div id="audio-ribbon" class="audio-ribbon"></div>
+                </div>
+            </section>
+
+            <!-- Mid Panels: Side-by-Side Transcription and Answer -->
+            <div class="content-split-grid">
+                
+                <section class="panel-card scroll-panel">
+                    <h2 class="panel-title card-header-inline">Transcribed Query</h2>
+                    <div id="transcription-box" class="box-content placeholder-text">
+                        Awaiting voice input...
+                    </div>
+                </section>
+                
+                <section class="panel-card scroll-panel">
+                    <h2 class="panel-title card-header-inline">Grounded Answer</h2>
+                    <div id="answer-box" class="box-content placeholder-text">
+                        Awaiting RAG execution...
+                    </div>
+                </section>
+                
+            </div>
+
+            <!-- Bottom Block: Grounding Details & Lineage -->
+            <section class="panel-card scroll-panel flex-grow">
+                <div class="card-header-with-status">
+                    <h2 class="panel-title margin-0">Grounding Verdict</h2>
+                    <span id="verdict-badge" class="verdict-badge badge-neutral">PENDING</span>
+                </div>
+                <div class="lineage-container">
+                    <div class="context-header">Retrieved Source Documents (Multilingual Passages)</div>
+                    <div id="lineage-sources" class="sources-list placeholder-text">
+                        No sources loaded.
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </main>
+
+    <script src="/static/index.js"></script>
+</body>
+</html>
