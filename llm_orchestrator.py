@@ -20,7 +20,8 @@ class GroqProvider(LLMProvider):
         self.api_key = os.getenv("GROQ_API_KEY")
         if not self.api_key:
             print("Warning: GROQ_API_KEY environment variable not found. Please set it in your .env file.", file=sys.stderr)
-        self.client = Groq(api_key=self.api_key)
+        # Global client with strict 3.0s timeout to enable fast pool reuse and fast failure recovery
+        self.client = Groq(api_key=self.api_key, timeout=3.0)
         self.model_name = model_name
 
     # Tenacity retry logic to handle Groq API rate limits (HTTP 429) or connection hiccups
