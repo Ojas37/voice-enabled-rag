@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const metricTtft = document.getElementById('metric-ttft');
     const metricGen = document.getElementById('metric-gen');
     const metricGuard = document.getElementById('metric-guard');
+    const metricNetwork = document.getElementById('metric-network');
     const metricE2e = document.getElementById('metric-e2e');
 
     // Recording State Variables
@@ -114,12 +115,13 @@ document.addEventListener('DOMContentLoaded', () => {
         lineageSources.innerHTML = '<div class="placeholder-text">Searching LanceDB index...</div>';
         
         // Reset metrics
-        metrics = { stt: 0, retrieval: 0, ttft: 0, generation: 0, guardrail: 0, e2e: 0 };
+        metrics = { stt: 0, retrieval: 0, ttft: 0, generation: 0, guardrail: 0, network: 0, e2e: 0 };
         metricStt.textContent = "-";
         metricRetrieval.textContent = "-";
         metricTtft.textContent = "-";
         metricGen.textContent = "-";
         metricGuard.textContent = "-";
+        metricNetwork.textContent = "-";
         metricE2e.textContent = "-";
         updateChart();
     }
@@ -267,6 +269,13 @@ document.addEventListener('DOMContentLoaded', () => {
             // Stop processing state
             recordingStatus.textContent = "READY";
             metrics.e2e = performance.now() - startTime;
+            
+            // Calculate network/rendering overhead to align components exactly with E2E RTT
+            const activeGen = Math.max(0, metrics.generation - metrics.ttft);
+            const sumComponents = metrics.stt + metrics.retrieval + metrics.ttft + activeGen + metrics.guardrail;
+            metrics.network = Math.max(0, metrics.e2e - sumComponents);
+            
+            metricNetwork.textContent = `${metrics.network.toFixed(0)} ms`;
             metricE2e.textContent = `${metrics.e2e.toFixed(0)} ms`;
             updateChart();
 
