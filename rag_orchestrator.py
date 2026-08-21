@@ -18,8 +18,16 @@ from llm_orchestrator import GroqProvider
 from guardrails import GuardrailEngine
 
 # ----------------- Configuration -----------------
-MODEL_ID = "intfloat/multilingual-e5-base"  # Production model
-DB_DIR = "data/lancedb"
+DEPLOY_ENV = os.getenv("DEPLOY_ENV", "local")
+
+if DEPLOY_ENV == "cloud":
+    print("DEPLOY_ENV=cloud detected. Using lightweight model and cloud database.", flush=True)
+    MODEL_ID = "intfloat/multilingual-e5-small"
+    DB_DIR = "data/lancedb_cloud"
+else:
+    MODEL_ID = "intfloat/multilingual-e5-base"  # Production model
+    DB_DIR = "data/lancedb"
+
 TABLE_NAME = "multilingual_passages"
 
 # ----------------- Grounding Prompts -----------------
@@ -51,11 +59,15 @@ def mean_pooling(model_output, attention_mask):
     return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
 def ensure_database():
-    import urllib.request
-    import zipfile
-    db_path = "data/lancedb"
+    db_path = DB_DIR
     if os.path.exists(db_path) and os.listdir(db_path):
-        print("LanceDB database exists locally.", flush=True)
+        print(f"LanceDB database exists locally at {db_path}.", flush=True)
+        return
+        
+    if DEPLOY_ENV == "cloud":
+        print("Database missing. Bootstrapping lightweight cloud index on CPU...", flush=True)
+        import deploy_bootstrap
+        deploy_bootstrap.bootstrap()
         return
         
     download_url = os.getenv("LANCE_DB_DOWNLOAD_URL")
@@ -68,7 +80,8 @@ def ensure_database():
     os.makedirs("data", exist_ok=True)
     
     try:
-        # User-agent header to avoid blocked requests from some hosts
+        import urllib.request
+        import zipfile
         opener = urllib.request.build_opener()
         opener.addheaders = [('User-agent', 'Mozilla/5.0')]
         urllib.request.install_opener(opener)
@@ -76,9 +89,8 @@ def ensure_database():
         urllib.request.urlretrieve(download_url, zip_path)
         print("Download complete. Extracting database...", flush=True)
         
-        # Extract to data/lancedb
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall("data/lancedb")
+            zip_ref.extractall(db_path)
         os.remove(zip_path)
         print("LanceDB database extracted successfully.", flush=True)
     except Exception as e:
