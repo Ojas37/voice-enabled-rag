@@ -48,3 +48,9 @@ model_onnx/
 model_onnx_small/
 model_onnx_base/
 *_onnx/
+
+# Temporary scratch scripts
+scratch/
+
+# Pre-built databases
+lancedb.zip

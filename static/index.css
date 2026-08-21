@@ -1,12 +1,15 @@
 :root {
-    --bg- obsidian: #0B0E11;
-    --panel-surface: #12171D;
-    --slate-border: #1C222B;
-    --text-primary: #F8FAFC;
+    --bg-obsidian: #080A0C;
+    --panel-surface: #0E1216;
+    --card-surface: #13191E;
+    --slate-border: #1F272F;
+    --text-primary: #F1F5F9;
+    --text-secondary: #94A3B8;
     --text-muted: #64748B;
-    --accent-indigo: #2563EB;
-    --metric-emerald: #059669;
-    --card-bg: rgba(18, 23, 29, 0.75);
+    --accent-indigo: #3B82F6;
+    --accent-indigo-glow: rgba(59, 130, 246, 0.15);
+    --metric-emerald: #10B981;
+    --metric-emerald-glow: rgba(16, 185, 129, 0.15);
     
     --font-heading: 'Lora', Georgia, serif;
     --font-body: 'IBM Plex Sans', 'IBM Plex Sans Devanagari', sans-serif;
@@ -27,6 +30,8 @@ body {
     flex-direction: column;
     height: 100vh;
     overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
 /* Header */
@@ -49,24 +54,25 @@ body {
 
 .logo-text {
     font-family: var(--font-heading);
-    font-size: 1.1rem;
+    font-size: 1.05rem;
     font-weight: 500;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.03em;
     color: var(--text-primary);
 }
 
 .badge {
-    padding: 4px 8px;
+    padding: 3px 8px;
     border-radius: 4px;
-    font-size: 0.7rem;
+    font-size: 0.65rem;
     font-weight: 500;
     font-family: var(--font-mono);
+    letter-spacing: 0.05em;
 }
 
 .badge-status {
-    background-color: rgba(5, 150, 105, 0.15);
+    background-color: var(--metric-emerald-glow);
     color: var(--metric-emerald);
-    border: 1px solid rgba(5, 150, 105, 0.3);
+    border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
 .header-meta {
@@ -79,12 +85,11 @@ body {
 
 .meta-label {
     font-weight: 500;
-    color: var(--text-muted);
 }
 
 .meta-value {
     font-family: var(--font-mono);
-    color: var(--text-primary);
+    color: var(--text-secondary);
 }
 
 .meta-separator {
@@ -98,23 +103,24 @@ body {
     grid-template-columns: 320px 1fr;
     height: calc(100vh - 56px);
     overflow: hidden;
+    background-color: var(--bg-obsidian);
 }
 
 /* Sidebar / Metric Rail */
 .metric-rail {
     background-color: var(--panel-surface);
     border-right: 1px solid var(--slate-border);
-    padding: 20px;
+    padding: 24px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 24px;
     overflow-y: auto;
 }
 
 .panel-section {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 14px;
 }
 
 .panel-section.fill-height {
@@ -125,11 +131,12 @@ body {
 
 .panel-title {
     font-family: var(--font-heading);
-    font-size: 1rem;
+    font-size: 0.95rem;
     font-weight: 500;
     color: var(--text-primary);
     padding-bottom: 8px;
     border-bottom: 1px solid var(--slate-border);
+    letter-spacing: 0.02em;
 }
 
 /* Control Elements */
@@ -144,33 +151,36 @@ body {
     align-items: center;
     gap: 10px;
     cursor: pointer;
-    padding: 8px 12px;
-    background-color: rgba(255, 255, 255, 0.02);
+    padding: 10px 14px;
+    background-color: rgba(255, 255, 255, 0.01);
     border: 1px solid var(--slate-border);
     border-radius: 6px;
     transition: background-color 0.2s, border-color 0.2s;
 }
 
 .radio-container:hover {
-    background-color: rgba(255, 255, 255, 0.05);
+    background-color: rgba(255, 255, 255, 0.03);
+    border-color: var(--text-muted);
 }
 
 .radio-container input[type="radio"] {
     accent-color: var(--accent-indigo);
     width: 14px;
     height: 14px;
+    cursor: pointer;
 }
 
 .radio-label {
     font-size: 0.85rem;
-    color: var(--text-primary);
+    color: var(--text-secondary);
+    font-weight: 500;
 }
 
 /* Latency Charts & Tables */
 .chart-container {
     height: 160px;
     position: relative;
-    margin-bottom: 12px;
+    margin-bottom: 16px;
 }
 
 .metric-table-container {
@@ -185,29 +195,34 @@ body {
 }
 
 .metric-table td {
-    padding: 8px 4px;
+    padding: 10px 4px;
     border-bottom: 1px solid var(--slate-border);
 }
 
 .metric-table td:first-child {
-    color: var(--text-muted);
+    color: var(--text-secondary);
+    font-weight: 500;
 }
 
 .metric-table td:last-child {
     text-align: right;
     font-weight: 500;
+    color: var(--text-primary);
 }
 
 .mono-value {
     font-family: var(--font-mono);
+    letter-spacing: -0.02em;
 }
 
 .highlight-row {
-    background-color: rgba(37, 99, 235, 0.05);
+    background-color: rgba(59, 130, 246, 0.03);
 }
 
 .highlight-row td {
     font-weight: 500;
+    border-top: 1px solid rgba(59, 130, 246, 0.1);
+    border-bottom: 1px solid rgba(59, 130, 246, 0.1);
 }
 
 .highlight-row td:last-child {
@@ -216,24 +231,30 @@ body {
 
 /* Workspace */
 .workspace-area {
-    padding: 24px;
+    padding: 24px 32px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 24px;
     overflow-y: auto;
+    background-color: var(--bg-obsidian);
 }
 
 .panel-card {
-    background-color: var(--panel-surface);
+    background-color: var(--card-surface);
     border: 1px solid var(--slate-border);
     border-radius: 8px;
-    padding: 16px;
+    padding: 20px;
     display: flex;
     flex-direction: column;
+    transition: border-color 0.2s ease;
+}
+
+.panel-card:hover {
+    border-color: rgba(255, 255, 255, 0.08);
 }
 
 .scroll-panel {
-    max-height: 350px;
+    max-height: 280px;
 }
 
 .flex-grow {
@@ -241,17 +262,15 @@ body {
 }
 
 .card-label {
-    font-size: 0.75rem;
-    font-weight: 500;
+    font-size: 0.7rem;
+    font-weight: 600;
     text-transform: uppercase;
     color: var(--text-muted);
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
 }
 
 /* Query Card */
 .query-card {
-    display: flex;
-    flex-direction: column;
     gap: 16px;
 }
 
@@ -263,53 +282,58 @@ body {
 
 .status-indicator {
     font-family: var(--font-mono);
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     font-weight: 500;
+    letter-spacing: 0.05em;
     color: var(--text-muted);
+    background-color: rgba(255, 255, 255, 0.02);
+    padding: 3px 8px;
+    border: 1px solid var(--slate-border);
+    border-radius: 4px;
 }
 
 .status-recording {
     color: #EF4444 !important;
+    background-color: rgba(239, 68, 68, 0.05) !important;
+    border-color: rgba(239, 68, 68, 0.2) !important;
 }
 
 .mic-workspace {
     display: flex;
     justify-content: center;
     align-items: center;
-    padding: 12px 0;
+    padding: 16px 0;
 }
 
 .btn {
-    padding: 12px 24px;
+    padding: 14px 28px;
     border: 1px solid var(--slate-border);
     border-radius: 6px;
     background-color: rgba(255, 255, 255, 0.02);
     color: var(--text-primary);
     font-family: var(--font-body);
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s ease;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
+}
+
+.btn-mic {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
 .btn-mic:hover {
-    background-color: rgba(37, 99, 235, 0.08);
-    border-color: rgba(37, 99, 235, 0.4);
+    background-color: var(--accent-indigo-glow);
+    border-color: rgba(59, 130, 246, 0.4);
 }
 
 .btn-recording {
-    background-color: rgba(239, 68, 68, 0.1) !important;
+    background-color: rgba(239, 68, 68, 0.08) !important;
     border-color: rgba(239, 68, 68, 0.5) !important;
-    animation: pulseBorder 1.5s infinite;
-}
-
-@keyframes pulseBorder {
-    0% { border-color: rgba(239, 68, 68, 0.4); }
-    50% { border-color: rgba(239, 68, 68, 0.8); }
-    100% { border-color: rgba(239, 68, 68, 0.4); }
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.15);
 }
 
 /* Audio Signal Ribbon */
@@ -326,26 +350,28 @@ body {
     width: 0%;
     background-color: var(--accent-indigo);
     transition: width 0.1s ease;
+    border-radius: 2px;
 }
 
 /* Mid Split Grid */
 .content-split-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 20px;
+    gap: 24px;
 }
 
 .card-header-inline {
-    margin-bottom: 12px;
+    margin-bottom: 16px;
 }
 
 .box-content {
-    font-size: 0.95rem;
+    font-size: 0.9rem;
     line-height: 1.6;
     overflow-y: auto;
     flex-grow: 1;
-    min-height: 120px;
+    min-height: 140px;
     white-space: pre-wrap;
+    color: var(--text-primary);
 }
 
 .placeholder-text {
@@ -359,47 +385,49 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding-bottom: 12px;
+    padding-bottom: 14px;
     border-bottom: 1px solid var(--slate-border);
-    margin-bottom: 12px;
+    margin-bottom: 14px;
 }
 
 .verdict-badge {
-    padding: 4px 8px;
+    padding: 3px 8px;
     border-radius: 4px;
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     font-family: var(--font-mono);
     font-weight: 500;
+    letter-spacing: 0.05em;
 }
 
 .badge-neutral {
-    background-color: rgba(255, 255, 255, 0.05);
+    background-color: rgba(255, 255, 255, 0.02);
     color: var(--text-muted);
     border: 1px solid var(--slate-border);
 }
 
 .badge-pass {
-    background-color: rgba(5, 150, 105, 0.15);
+    background-color: var(--metric-emerald-glow);
     color: var(--metric-emerald);
-    border: 1px solid rgba(5, 150, 105, 0.3);
+    border: 1px solid rgba(16, 185, 129, 0.2);
 }
 
 .badge-fail {
-    background-color: rgba(239, 68, 68, 0.15);
+    background-color: rgba(239, 68, 68, 0.08);
     color: #EF4444;
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    border: 1px solid rgba(239, 68, 68, 0.2);
 }
 
 .lineage-container {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 12px;
 }
 
 .context-header {
     font-size: 0.75rem;
     font-weight: 500;
-    color: var(--text-muted);
+    color: var(--text-secondary);
+    letter-spacing: 0.02em;
 }
 
 .sources-list {
@@ -407,12 +435,12 @@ body {
     flex-direction: column;
     gap: 12px;
     overflow-y: auto;
-    max-height: 200px;
+    max-height: 180px;
 }
 
 .source-node {
-    padding: 10px 14px;
-    background-color: rgba(255, 255, 255, 0.01);
+    padding: 12px 16px;
+    background-color: rgba(255, 255, 255, 0.005);
     border: 1px solid var(--slate-border);
     border-radius: 6px;
 }
@@ -422,14 +450,14 @@ body {
     justify-content: space-between;
     font-size: 0.7rem;
     color: var(--text-muted);
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     font-family: var(--font-mono);
 }
 
 .source-body {
     font-size: 0.85rem;
     line-height: 1.5;
-    color: var(--text-primary);
+    color: var(--text-secondary);
 }
 
 .margin-0 {

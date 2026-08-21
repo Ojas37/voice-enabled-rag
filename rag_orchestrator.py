@@ -50,8 +50,45 @@ def mean_pooling(model_output, attention_mask):
     input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
     return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
+def ensure_database():
+    import urllib.request
+    import zipfile
+    db_path = "data/lancedb"
+    if os.path.exists(db_path) and os.listdir(db_path):
+        print("LanceDB database exists locally.", flush=True)
+        return
+        
+    download_url = os.getenv("LANCE_DB_DOWNLOAD_URL")
+    if not download_url:
+        print("Warning: LANCE_DB_DOWNLOAD_URL environment variable is not set and local database is missing.", flush=True)
+        return
+        
+    print(f"Downloading pre-built LanceDB database from {download_url}...", flush=True)
+    zip_path = "data/lancedb.zip"
+    os.makedirs("data", exist_ok=True)
+    
+    try:
+        # User-agent header to avoid blocked requests from some hosts
+        opener = urllib.request.build_opener()
+        opener.addheaders = [('User-agent', 'Mozilla/5.0')]
+        urllib.request.install_opener(opener)
+        
+        urllib.request.urlretrieve(download_url, zip_path)
+        print("Download complete. Extracting database...", flush=True)
+        
+        # Extract to data/lancedb
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall("data/lancedb")
+        os.remove(zip_path)
+        print("LanceDB database extracted successfully.", flush=True)
+    except Exception as e:
+        print(f"Error downloading or extracting database: {e}", file=sys.stderr)
+
 class RAGPipeline:
     def __init__(self):
+        # Auto-download LanceDB zip if missing on startup
+        ensure_database()
+        
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Loading embedding model on {self.device.type.upper()}...", flush=True)
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
@@ -60,13 +97,18 @@ class RAGPipeline:
             # Load in FP16 for massive memory savings and acceleration on GPU
             self.model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.float16).to(self.device)
         else:
-            # Fallback to local CPU ONNX model
-            self.model = ORTModelForFeatureExtraction.from_pretrained("./model_onnx_base")
+            # Fallback to local CPU ONNX model if available, else download Hugging Face model
+            if os.path.exists("./model_onnx_base"):
+                print("Loading local ONNX model for CPU extraction...", flush=True)
+                self.model = ORTModelForFeatureExtraction.from_pretrained("./model_onnx_base")
+            else:
+                print("Local ONNX model not found. Loading model from HuggingFace on CPU...", flush=True)
+                self.model = AutoModel.from_pretrained(MODEL_ID).to(self.device)
             
         print("Connecting to LanceDB...", flush=True)
         self.db = lancedb.connect(DB_DIR)
         if TABLE_NAME not in self.db.table_names():
-            raise ValueError(f"LanceDB table '{TABLE_NAME}' not found. Please run index_and_retrieve.py first to build the index.")
+            raise ValueError(f"LanceDB table '{TABLE_NAME}' not found. Please verify indexing or LANCE_DB_DOWNLOAD_URL.")
         self.table = self.db.open_table(TABLE_NAME)
         
         print("Initializing Groq LLM Provider...", flush=True)
