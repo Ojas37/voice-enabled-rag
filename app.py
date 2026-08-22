@@ -63,10 +63,15 @@ def get_stt_engine():
         print("STT Engine loaded successfully.", flush=True)
     return stt_engine
 
+import threading
+
 @app.on_event("startup")
 def startup_event():
     # Keep startup instant to satisfy Railway/Render HTTP TCP health check immediately
-    print("Application container started successfully. Awaiting lazy-load RAG calls...", flush=True)
+    print("Application container started. Spawning background threads for model loading & database indexing...", flush=True)
+    # Pre-warm the models asynchronously so they are fully loaded before the first user request
+    threading.Thread(target=get_pipeline, daemon=True).start()
+    threading.Thread(target=get_stt_engine, daemon=True).start()
 
 # Helper function to format Server-Sent Events
 def format_sse(data: dict) -> str:
