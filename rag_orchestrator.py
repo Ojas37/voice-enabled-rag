@@ -5,7 +5,12 @@ import numpy as np
 import torch
 import lancedb
 from transformers import AutoModel, AutoTokenizer
-from optimum.onnxruntime import ORTModelForFeatureExtraction
+# Conditional import of optimum to avoid import crashes on cloud environments
+try:
+    from optimum.onnxruntime import ORTModelForFeatureExtraction
+    OPTIMUM_AVAILABLE = True
+except ImportError:
+    OPTIMUM_AVAILABLE = False
 
 # Reconfigure stdout/stderr to UTF-8
 if hasattr(sys.stdout, 'reconfigure'):
@@ -109,12 +114,12 @@ class RAGPipeline:
             # Load in FP16 for massive memory savings and acceleration on GPU
             self.model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.float16).to(self.device)
         else:
-            # Fallback to local CPU ONNX model if available, else download Hugging Face model
-            if os.path.exists("./model_onnx_base"):
+            # Fallback to local CPU ONNX model if available and optimum is imported successfully
+            if os.path.exists("./model_onnx_base") and OPTIMUM_AVAILABLE:
                 print("Loading local ONNX model for CPU extraction...", flush=True)
                 self.model = ORTModelForFeatureExtraction.from_pretrained("./model_onnx_base")
             else:
-                print("Local ONNX model not found. Loading model from HuggingFace on CPU...", flush=True)
+                print("ONNX model or optimum library not available. Loading model from HuggingFace on CPU...", flush=True)
                 self.model = AutoModel.from_pretrained(MODEL_ID).to(self.device)
             
         print("Connecting to LanceDB...", flush=True)
