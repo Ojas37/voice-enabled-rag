@@ -14,7 +14,7 @@ from chunking import Chunker
 MODEL_ID = "intfloat/multilingual-e5-small"  # 384 dimensions, ~130MB on CPU
 DB_DIR = "data/lancedb_cloud"
 TABLE_NAME = "multilingual_passages"
-LIMIT_ROWS = 100  # Small subset to easily fit in 512MB RAM and index in <30 seconds
+LIMIT_ROWS = 15  # Smaller subset for sub-20s startup indexing on CPU
 
 DATA_FILES = {
     "hinval_real_mini.parquet": "https://huggingface.co/datasets/ai4bharat/MSMARCO-XI/resolve/main/validation/hinval.parquet",
