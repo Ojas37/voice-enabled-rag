@@ -47,13 +47,26 @@ def read_index():
 pipeline = None
 stt_engine = None
 
+def get_pipeline():
+    global pipeline
+    if pipeline is None:
+        print("Lazy loading RAG Pipeline...", flush=True)
+        pipeline = RAGPipeline()
+        print("RAG Pipeline loaded successfully.", flush=True)
+    return pipeline
+
+def get_stt_engine():
+    global stt_engine
+    if stt_engine is None:
+        print("Lazy loading STT Engine...", flush=True)
+        stt_engine = SarvamSTT()
+        print("STT Engine loaded successfully.", flush=True)
+    return stt_engine
+
 @app.on_event("startup")
 def startup_event():
-    global pipeline, stt_engine
-    print("Starting up server components...", flush=True)
-    pipeline = RAGPipeline()
-    stt_engine = SarvamSTT()
-    print("Server components loaded successfully.", flush=True)
+    # Keep startup instant to satisfy Railway/Render HTTP TCP health check immediately
+    print("Application container started successfully. Awaiting lazy-load RAG calls...", flush=True)
 
 # Helper function to format Server-Sent Events
 def format_sse(data: dict) -> str:
@@ -82,9 +95,9 @@ def query_text_endpoint(payload: dict):
         
     async def sse_generator():
         try:
-            # We run the synchronous query_stream_events generator in an executor or direct loop
-            # Since it yields tokens, we run it directly. To make it non-blocking, we yield periodically.
-            events = pipeline.query_stream_events(query)
+            # Lazy load on first query
+            pipe = get_pipeline()
+            events = pipe.query_stream_events(query)
             for event in events:
                 yield format_sse(event)
                 await asyncio.sleep(0.01) # Yield execution to event loop
@@ -107,9 +120,13 @@ async def query_voice_endpoint(file: UploadFile = File(...), language: str = For
 
     async def voice_sse_generator():
         try:
+            # Lazy load components on first voice query
+            stt = get_stt_engine()
+            pipe = get_pipeline()
+
             # 1. Execute Speech-to-Text Transcription via Sarvam AI
             print("Invoking Sarvam AI Speech-to-Text...", flush=True)
-            transcript, stt_latency = stt_engine.transcribe(audio_bytes, filename=file.filename)
+            transcript, stt_latency = stt.transcribe(audio_bytes, filename=file.filename)
             
             # 2. Handle STT Failure Modes explicitly
             if transcript is None:
@@ -145,7 +162,7 @@ async def query_voice_endpoint(file: UploadFile = File(...), language: str = For
             await asyncio.sleep(0.01)
 
             # 3. Stream RAG Pipeline Events using the transcribed text
-            events = pipeline.query_stream_events(transcript)
+            events = pipe.query_stream_events(transcript)
             for event in events:
                 yield format_sse(event)
                 await asyncio.sleep(0.01)
