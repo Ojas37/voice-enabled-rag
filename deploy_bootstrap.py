@@ -7,6 +7,9 @@ import numpy as np
 import lancedb
 import pyarrow as pa
 import torch
+# Limit PyTorch to 1 thread to prevent thread overhead on CPU container startup
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
 from transformers import AutoModel, AutoTokenizer
 from chunking import Chunker
 

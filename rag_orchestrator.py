@@ -3,6 +3,9 @@ import sys
 import time
 import numpy as np
 import torch
+# Limit PyTorch to 1 thread to prevent massive memory/thread overhead in 512MB CPU containers
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
 import lancedb
 from transformers import AutoModel, AutoTokenizer
 # Conditional import of optimum to avoid import crashes on cloud environments
