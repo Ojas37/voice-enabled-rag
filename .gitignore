@@ -54,3 +54,8 @@ scratch/
 
 # Pre-built databases
 lancedb.zip
+
+# Evaluation tools & results
+eval/
+results/
+run.ps1
